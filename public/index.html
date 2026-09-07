@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FRIGARO — Cold Chain Command Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ===== Sidebar ===== -->
+  <aside class="sidebar glass">
+    <div class="brand">
+      <div class="brand-mark clay"><i data-lucide="snowflake"></i></div>
+      <div class="brand-text">
+        <span class="brand-name">FRIGARO</span>
+        <span class="brand-sub">Cold Chain OS</span>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <button class="nav-item active" data-panel="overview">
+        <span class="nav-icon clay"><i data-lucide="layout-dashboard"></i></span>
+        <span class="nav-label">Control Room</span>
+      </button>
+      <button class="nav-item" data-panel="register-cargo">
+        <span class="nav-icon clay"><i data-lucide="package-plus"></i></span>
+        <span class="nav-label">Register Cargo</span>
+      </button>
+      <button class="nav-item" data-panel="cold-boxes">
+        <span class="nav-icon clay"><i data-lucide="snowflake"></i></span>
+        <span class="nav-label">Cold Box Health</span>
+      </button>
+      <button class="nav-item" data-panel="cooling">
+        <span class="nav-icon clay"><i data-lucide="fan"></i></span>
+        <span class="nav-label">Cooling &amp; Airflow</span>
+      </button>
+      <button class="nav-item" data-panel="risk">
+        <span class="nav-icon clay"><i data-lucide="shield-alert"></i></span>
+        <span class="nav-label">Spoilage Risk</span>
+      </button>
+      <button class="nav-item" data-panel="alerts">
+        <span class="nav-icon clay"><i data-lucide="bell-ring"></i></span>
+        <span class="nav-label">Alerts</span>
+        <span class="nav-badge" id="alertBadge">0</span>
+      </button>
+      <button class="nav-item" data-panel="routes">
+        <span class="nav-icon clay"><i data-lucide="map"></i></span>
+        <span class="nav-label">Route Status</span>
+      </button>
+      <button class="nav-item" data-panel="disruptions">
+        <span class="nav-icon clay"><i data-lucide="mountain-snow"></i></span>
+        <span class="nav-label">Disruption Events</span>
+      </button>
+      <button class="nav-item" data-panel="reroute">
+        <span class="nav-icon clay"><i data-lucide="route"></i></span>
+        <span class="nav-label">Reroute Assistant</span>
+      </button>
+      <button class="nav-item" data-panel="loads">
+        <span class="nav-icon clay"><i data-lucide="truck"></i></span>
+        <span class="nav-label">Loads in Transit</span>
+      </button>
+      <button class="nav-item" data-panel="waste">
+        <span class="nav-icon clay"><i data-lucide="leaf"></i></span>
+        <span class="nav-label">Waste &amp; Impact</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="footer-status">
+        <span class="pulse-dot"></span>
+        <span>System Normal</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ===== Main ===== -->
+  <main class="main">
+
+    <header class="topbar glass">
+      <div class="topbar-left">
+        <h1 id="pageTitle">Control Room Overview</h1>
+        <p id="pageSub">Every cold box, route and load at a glance</p>
+      </div>
+      <div class="topbar-right">
+        <div class="live-pill"><span class="pulse-dot"></span> LIVE</div>
+        <div class="clock" id="clock">--:--:--</div>
+        <button class="force-tick-btn" id="forceTickBtn"><i data-lucide="refresh-cw"></i> Force Update</button>
+      </div>
+    </header>
+
+    <div class="health-banner" id="healthBanner" style="display:none;"></div>
+
+    <div class="panels">
+
+      <!-- ===== 1. CONTROL ROOM OVERVIEW ===== -->
+      <section class="panel active" id="panel-overview">
+        <div class="kpi-row">
+          <div class="kpi-card glass">
+            <span class="kpi-icon clay"><i data-lucide="snowflake"></i></span>
+            <div><span class="kpi-value" id="ovColdBoxes">–</span><span class="kpi-label" id="ovColdBoxesSub">Cold Boxes Live</span></div>
+          </div>
+          <div class="kpi-card glass">
+            <span class="kpi-icon clay"><i data-lucide="truck"></i></span>
+            <div><span class="kpi-value" id="ovLoads">–</span><span class="kpi-label" id="ovLoadsSub">Loads Moving</span></div>
+          </div>
+          <div class="kpi-card glass">
+            <span class="kpi-icon clay"><i data-lucide="triangle-alert"></i></span>
+            <div><span class="kpi-value" id="ovRoutesBlocked">–</span><span class="kpi-label" id="ovRoutesBlockedSub">Routes Blocked</span></div>
+          </div>
+          <div class="kpi-card glass">
+            <span class="kpi-icon clay"><i data-lucide="trending-down"></i></span>
+            <div><span class="kpi-value" id="ovLoss">–</span><span class="kpi-label">Loss Today</span></div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card glass operations-card">
+            <div class="card-head">
+              <h3><i data-lucide="activity"></i> Live Operations Summary</h3>
+              <button class="btn-clay small" id="overviewRegisterBtn"><i data-lucide="package-plus"></i> Register Cargo</button>
+            </div>
+            <div class="operations-grid">
+              <div class="operation-metric"><span class="op-label">Active Shipments</span><b id="opActiveLoads">–</b></div>
+              <div class="operation-metric"><span class="op-label">Network Weight</span><b id="opWeight">–</b></div>
+              <div class="operation-metric"><span class="op-label">Critical Routes</span><b id="opCriticalRoutes">–</b></div>
+              <div class="operation-metric"><span class="op-label">Attention Needed</span><b id="opAttention">–</b></div>
+            </div>
+            <div class="operations-note"><i data-lucide="sparkles"></i><span>Register a shipment, review every detail, then FRIGARO adds it to the live cold-chain workflow.</span></div>
+          </div>
+
+          <div class="card glass">
+            <div class="card-head"><h3><i data-lucide="brain-circuit"></i> Highest Risk Right Now</h3></div>
+            <div id="ovTopRisk"></div>
+            <div class="card-head" style="margin-top:18px;"><h3><i data-lucide="bell-ring"></i> Latest Alerts</h3></div>
+            <div id="ovTopAlerts"></div>
+          </div>
+        </div>
+
+        <div class="card glass">
+          <div class="card-head"><h3><i data-lucide="info"></i> How this dashboard works</h3></div>
+          <p>Every number above is computed live from Supabase: cold box readings, real weather at each route's checkpoint, and load/delivery outcomes. Nothing here is hardcoded — explore the panels on the left for the full picture.</p>
+        </div>
+      </section>
+
+      <!-- ===== REGISTER CARGO ===== -->
+      <section class="panel" id="panel-register-cargo">
+        <div class="card glass cargo-card">
+          <div class="card-head"><h3><i data-lucide="package-plus"></i> Register Cargo</h3><span class="card-tag">Review before confirmation</span></div>
+          <form id="cargoForm" class="cargo-form">
+            <div class="cargo-section"><h4><i data-lucide="user-round"></i> Owner Information</h4><div class="cargo-grid two">
+              <div class="form-field"><label>Full Name</label><input id="cargoOwnerName" required placeholder="Your full name"></div>
+              <div class="form-field"><label>Phone Number</label><input id="cargoPhone" required inputmode="tel" placeholder="+91 XXXXX XXXXX"></div>
+            </div></div>
+            <div class="cargo-section"><h4><i data-lucide="map-pin"></i> Route & Timing</h4><div class="cargo-grid three">
+              <div class="form-field"><label>Origin</label><input id="cargoOrigin" required placeholder="e.g. Sopore"></div>
+              <div class="form-field"><label>Destination</label><input id="cargoDestination" required placeholder="e.g. Jammu"></div>
+              <div class="form-field"><label>Corridor <span class="box-sub" style="font-weight:400;">(pick the real route this shipment travels — links live weather, risk & reroute)</span></label><select id="cargoRoute"><option value="">No corridor match — custom/local route</option></select></div>
+              <div class="form-field"><label>Expected Transit (hours)</label><input id="cargoTransitHours" required type="number" min="0.5" step="0.5" placeholder="10"></div>
+              <div class="form-field"><label>Departure</label><input id="cargoDeparture" type="datetime-local"></div>
+            </div></div>
+            <div class="cargo-section"><h4><i data-lucide="boxes"></i> Product & Weight</h4><div class="cargo-grid three">
+              <div class="form-field"><label>Product</label><select id="cargoProduct" required></select></div>
+              <div class="form-field"><label>Number of Boxes</label><input id="cargoBoxes" required type="number" min="1" step="1" placeholder="100"></div>
+              <div class="form-field"><label>Weight per Box (kg)</label><input id="cargoWeightPerBox" required type="number" min="0.01" step="0.01" placeholder="20"></div>
+              <div class="form-field"><label>Cold Box <span class="box-sub" style="font-weight:400;">(optional — enables live sensor tracking)</span></label><select id="cargoColdBox"><option value="">No cold box — generic risk baseline</option></select></div>
+              <div class="calc-field"><span>Total Weight</span><b id="cargoTotalWeight">0 kg</b></div>
+            </div></div>
+            <div class="cargo-section"><h4><i data-lucide="indian-rupee"></i> Cargo Value</h4><div class="cargo-grid three">
+              <div class="form-field"><label>Pricing Method</label><select id="cargoPricingMethod"><option value="per_kg">Price per KG</option><option value="per_box">Price per Box</option></select></div>
+              <div class="form-field"><label id="cargoPriceLabel">Price per KG (₹)</label><input id="cargoUnitPrice" required type="number" min="0" step="0.01" placeholder="80"></div>
+              <div class="calc-field highlight"><span>Estimated Total Cargo Value</span><b id="cargoTotalValue">₹0</b></div>
+            </div></div>
+            <div class="cargo-actions"><button type="button" class="btn-clay" id="cargoReviewBtn"><i data-lucide="clipboard-check"></i> Review Registration</button></div>
+          </form>
+        </div>
+        <div class="card glass cargo-review" id="cargoReviewCard" style="display:none;">
+          <div class="card-head"><h3><i data-lucide="clipboard-list"></i> Review Before Confirmation</h3><span class="card-tag">Nothing is saved until you confirm</span></div>
+          <div id="cargoReviewContent"></div>
+          <div class="cargo-actions review-actions"><button class="btn-clay ghost" id="cargoEditBtn">Edit Details</button><button class="btn-clay" id="cargoConfirmBtn"><i data-lucide="check-circle-2"></i> Confirm Registration</button></div>
+        </div>
+        <div class="card glass cargo-success" id="cargoSuccessCard" style="display:none;"></div>
+      </section>
+
+      <!-- ===== 2. COLD BOX HEALTH ===== -->
+      <section class="panel" id="panel-cold-boxes">
+        <div class="card glass">
+          <div class="card-head"><h3><i data-lucide="snowflake"></i> Cold Box Health</h3><span class="card-tag">Temperature, humidity, airflow, battery &amp; product</span></div>
+          <div class="box-grid" id="boxGrid"></div>
+        </div>
+      </section>
+
+      <!-- ===== 3. COOLING & AIRFLOW ===== -->
+      <section class="panel" id="panel-cooling">
+        <div class="card glass">
+          <div class="card-head"><h3><i data-lucide="fan"></i> Cooling &amp; Airflow Control</h3><span class="card-tag">Set the target climate per box</span></div>
+          <div class="control-grid" id="controlGrid"></div>
+        </div>
+      </section>
+
+      <!-- ===== 4. SPOILAGE RISK ===== -->
+      <section class="panel" id="panel-risk">
+        <div class="card glass">
+          <div class="card-head"><h3><i data-lucide="brain-circuit"></i> Risk by Cold Box</h3><span class="card-tag">Product-aware, computed live</span></div>
+          <div class="risk-grid" id="riskGrid"></div>
+        </div>
+        <div class="card glass">
+          <div class="card-head"><h3><i data-lucide="truck"></i> Risk by Load in Transit</h3></div>
+          <div id="loadRiskList"></div>
+        </div>
+      </section>
+
+      <!-- ===== 5. ALERTS ===== -->
+      <section class="panel" id="panel-alerts">
+        <div class="card glass">
+          <div class="card-head">
+            <h3><i data-lucide="bell-ring"></i> Alert Feed</h3>
+            <button class="btn-clay small" id="clearAlertsBtn"><i data-lucide="trash-2"></i> Resolve All</button>
+          </div>
+          <ul class="alert-feed" id="alertFeed"></ul>
+        </div>
+      </section>
+
+      <!-- ===== 6. ROUTE STATUS ===== -->
+      <section class="panel" id="panel-routes">
+        <div class="card glass map-card">
+          <div class="card-head"><h3><i data-lucide="map"></i> Route Status — Jammu, Kashmir &amp; Ladakh</h3></div>
+          <div id="map"></div>
+          <div class="map-legend">
+            <span><i class="dot open"></i> Open</span>
+            <span><i class="dot caution"></i> Caution</span>
+            <span><i class="dot blocked"></i> Blocked</span>
+          </div>
+        </div>
+        <div class="card glass">
+          <div class="card-head"><h3><i data-lucide="list"></i> Corridors</h3></div>
+          <ul class="route-list" id="routeList"></ul>
+        </div>
+      </section>
+
+      <!-- ===== 7. DISRUPTION EVENTS ===== -->
+      <section class="panel" id="panel-disruptions">
+        <div class="card glass">
+          <div class="card-head"><h3><i data-lucide="mountain-snow"></i> Active Disruptions</h3></div>
+          <div class="disruption-grid" id="disruptionGrid"></div>
+
+          <div class="card-head" style="margin-top:6px;"><h3><i data-lucide="plus"></i> Report a Disruption</h3></div>
+          <form class="new-disruption-form" id="disruptionForm">
+            <div class="form-field">
+              <label>Route</label>
+              <select id="disruptionRoute" required></select>
+            </div>
+            <div class="form-field">
+              <label>Type</label>
+              <select id="disruptionType" required>
+                <option value="landslide">Landslide</option>
+                <option value="snowfall">Snowfall</option>
+                <option value="convoy_hold">Convoy Hold</option>
+                <option value="market_strike">Market Strike</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Severity</label>
+              <select id="disruptionSeverity" required>
+                <option value="low">Low</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Location</label>
+              <input type="text" id="disruptionLocation" placeholder="e.g. Ramban" required>
+            </div>
+            <button class="btn-clay" type="submit" style="grid-column:1/-1;"><i data-lucide="send"></i> Report</button>
+          </form>
+        </div>
+      </section>
+
+      <!-- ===== 8. REROUTE ASSISTANT ===== -->
+      <section class="panel" id="panel-reroute">
+        <div class="card glass">
+          <div class="card-head">
+            <h3><i data-lucide="route"></i> Reroute Assistant</h3>
+            <span class="card-tag">Suggested moves, you stay in control</span>
+          </div>
+          <div id="rerouteList"></div>
+        </div>
+      </section>
+
+      <!-- ===== 9. LOADS IN TRANSIT ===== -->
+      <section class="panel" id="panel-loads">
+        <div class="card glass">
+          <div class="card-head"><h3><i data-lucide="truck"></i> Loads in Transit</h3><span class="card-tag">Every truck, its crate and its route</span></div>
+          <div style="overflow-x:auto;">
+            <table class="loads-table">
+              <thead><tr><th>Truck</th><th>Product</th><th>Cold Box</th><th>Route</th><th>Status</th><th>ETA</th><th>Risk</th></tr></thead>
+              <tbody id="loadsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 10. WASTE & IMPACT ===== -->
+      <section class="panel" id="panel-waste">
+        <div class="impact-kpis">
+          <div class="impact-kpi glass"><div class="impact-kpi-value" id="wasteSaved">–</div><div class="impact-kpi-label">Produce Saved (t), 7 days</div></div>
+          <div class="impact-kpi glass"><div class="impact-kpi-value" id="wasteRate">–</div><div class="impact-kpi-label">Waste Rate</div></div>
+          <div class="impact-kpi glass"><div class="impact-kpi-value" id="wasteCo2">–</div><div class="impact-kpi-label">CO₂ Avoided (t)</div></div>
+        </div>
+        <div class="card glass">
+          <div class="card-head"><h3><i data-lucide="line-chart"></i> Daily Saved vs. Wasted (kg)</h3></div>
+          <canvas id="wasteChart" height="220"></canvas>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<script src="https://unpkg.com/lucide@latest"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="js/api.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
