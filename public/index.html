@@ -298,12 +298,41 @@
           <div class="card-head"><h3><i data-lucide="truck"></i> Loads in Transit</h3><span class="card-tag">Every truck, its crate and its route</span></div>
           <div style="overflow-x:auto;">
             <table class="loads-table">
-              <thead><tr><th>Truck</th><th>Product</th><th>Cold Box</th><th>Route</th><th>Status</th><th>ETA</th><th>Risk</th></tr></thead>
+              <thead><tr><th>Truck</th><th>Product</th><th>Cold Box</th><th>Route</th><th>Status</th><th>ETA</th><th>Risk</th><th></th></tr></thead>
               <tbody id="loadsTableBody"></tbody>
             </table>
           </div>
         </div>
+        <div class="card glass" id="delayAnalysisCard" style="display:none;"></div>
       </section>
+
+      <!-- Report Delay modal — a driver logging a real blockage -->
+      <div class="modal-overlay" id="delayModalOverlay" style="display:none;">
+        <div class="modal-box glass">
+          <div class="control-row-head"><b><i data-lucide="clock"></i> Report a Delay</b></div>
+          <p class="box-sub" style="margin:6px 0 14px;">Logging this creates a real disruption and runs a projection from live weather — not a guess.</p>
+          <div class="form-field"><label>Load ID</label><input id="delayLoadId" disabled></div>
+          <div class="form-field"><label>Type</label>
+            <select id="delayType">
+              <option value="road_closure">Road Closure</option>
+              <option value="landslide">Landslide</option>
+              <option value="snowfall">Snowfall</option>
+              <option value="traffic_jam">Traffic Jam</option>
+              <option value="convoy_hold">Convoy Hold</option>
+              <option value="accident">Accident</option>
+            </select>
+          </div>
+          <div class="form-field"><label>Location</label><input id="delayLocation" placeholder="e.g. Ramban"></div>
+          <div class="form-field"><label>Severity</label>
+            <select id="delaySeverity"><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
+          </div>
+          <div class="form-field"><label>Estimated delay (hours)</label><input id="delayHours" type="number" min="0.25" step="0.25" placeholder="e.g. 6"></div>
+          <div style="display:flex; gap:10px; margin-top:14px;">
+            <button class="btn-clay small" id="delayCancelBtn" type="button">Cancel</button>
+            <button class="btn-clay small primary" id="delaySubmitBtn" type="button"><i data-lucide="triangle-alert"></i> Run Analysis</button>
+          </div>
+        </div>
+      </div>
 
       <!-- ===== 10. WASTE & IMPACT ===== -->
       <section class="panel" id="panel-waste">

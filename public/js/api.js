@@ -48,5 +48,6 @@ const API = {
   registerCargo: (body) => jsonFetch('/api/cargo/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
 
   loads: () => jsonFetch('/api/loads'),
+  reportDelay: (body) => jsonFetch('/api/driver/report-blockage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   wasteImpact: () => jsonFetch('/api/waste-impact'),
 };

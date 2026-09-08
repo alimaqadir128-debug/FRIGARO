@@ -475,132 +475,10 @@ async function loadReroute(){
 }
 
 /* ---------------- 9. LOADS IN TRANSIT ---------------- */
-let loadsCache = [];
-
-// The backend's /api/driver/report-blockage has always existed and worked —
-// nothing in the UI ever called it. Everything below is injected purely from
-// JS (no index.html/CSS edits) so this one file is enough to wire it up.
-function ensureLoadsActionColumn(){
-  const headRow = document.querySelector('#panel-loads .loads-table thead tr');
-  if (headRow && headRow.children.length < 8) headRow.appendChild(document.createElement('th'));
-}
-
-function ensureBlockageUI(){
-  if (document.getElementById('blockageCard')) return;
-  const panel = document.getElementById('panel-loads');
-  if (!panel) return;
-  const card = document.createElement('div');
-  card.className = 'card glass';
-  card.id = 'blockageCard';
-  card.style.display = 'none';
-  card.innerHTML = `
-    <div class="card-head"><h3><i data-lucide="clock-alert"></i> Report Blockage — <span id="blockageLoadLabel"></span></h3><span class="card-tag">Real weather + product data, no guessing</span></div>
-    <form class="new-disruption-form" id="blockageForm">
-      <div class="form-field">
-        <label>Type</label>
-        <select id="blockageType" required>
-          <option value="road_closure">Road Closure</option>
-          <option value="landslide">Landslide</option>
-          <option value="snowfall">Snowfall</option>
-          <option value="traffic_jam">Traffic Jam</option>
-          <option value="convoy_hold">Convoy Hold</option>
-          <option value="accident">Accident</option>
-        </select>
-      </div>
-      <div class="form-field"><label>Location</label><input id="blockageLocation" required placeholder="e.g. Zoji La"></div>
-      <div class="form-field">
-        <label>Severity</label>
-        <select id="blockageSeverity" required>
-          <option value="low">Low</option>
-          <option value="medium">Medium</option>
-          <option value="high" selected>High</option>
-        </select>
-      </div>
-      <div class="form-field"><label>Hours blocked (so far / expected)</label><input id="blockageHours" type="number" min="0.25" step="0.25" value="6" required></div>
-      <div class="form-field" style="align-self:flex-end; display:flex; gap:8px;">
-        <button type="button" class="btn-clay ghost" id="blockageCancelBtn">Cancel</button>
-        <button type="submit" class="btn-clay" id="blockageSubmitBtn"><i data-lucide="send"></i> Get Analysis</button>
-      </div>
-    </form>
-    <div id="blockageResult"></div>`;
-  panel.appendChild(card);
-  document.getElementById('blockageCancelBtn').addEventListener('click', () => { card.style.display = 'none'; });
-  document.getElementById('blockageForm').addEventListener('submit', submitBlockageReport);
-}
-
-function openBlockageForm(load){
-  ensureBlockageUI();
-  const card = document.getElementById('blockageCard');
-  card.dataset.loadId = load.id;
-  document.getElementById('blockageLoadLabel').textContent = `${load.id} (${load.products ? load.products.name : 'cargo'})`;
-  document.getElementById('blockageResult').innerHTML = '';
-  card.style.display = 'block';
-  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  if (window.lucide) lucide.createIcons();
-}
-
-function renderBlockageAnalysis(result){
-  const a = result.analysis;
-  const reroute = (result.rerouteSuggestions || []).length
-    ? `<div class="box-sub" style="margin-top:10px;"><b>Reroute options:</b> ` +
-      result.rerouteSuggestions.map(s => s.to_route_id
-        ? `via ${esc(s.to ? s.to.name : s.to_route_id)} (${s.status})`
-        : `hold — no viable alternate yet (${s.status})`).join(', ') + `</div>`
-    : '';
-  if (!a) {
-    return `<div class="box-sub" style="margin-top:14px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.12);">
-      Blockage logged. This load has no cold box or product assigned, so no temperature/spoilage projection could be run.</div>${reroute}`;
-  }
-  return `
-    <div style="margin-top:14px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.12);">
-      <div class="control-row-head"><b><i data-lucide="thermometer"></i> Projected after ${a.delayHours}h blocked</b></div>
-      <div class="box-sub" style="margin:6px 0;">Live ambient at the cold box's location: ${a.ambientTemp}°C, ${a.ambientHumidity}% RH</div>
-      <div style="display:flex; gap:10px; flex-wrap:wrap; margin:8px 0;">
-        <span class="status-chip open">${a.projectedTemp}°C</span>
-        <span class="status-chip open">${a.projectedHumidity}% RH</span>
-        <span class="status-chip ${a.riskAfter >= 66 ? 'blocked' : a.riskAfter >= 33 ? 'caution' : 'open'}">Risk ${a.riskBefore}% → ${a.riskAfter}%</span>
-      </div>
-      <div class="box-sub">Estimated additional spoilage if this holds: <b>${a.estimatedAdditionalWasteKg} kg</b>.</div>
-      ${reroute}
-    </div>`;
-}
-
-async function submitBlockageReport(e){
-  e.preventDefault();
-  const card = document.getElementById('blockageCard');
-  const loadId = card.dataset.loadId;
-  const btn = document.getElementById('blockageSubmitBtn');
-  const original = btn.innerHTML;
-  btn.disabled = true; btn.textContent = 'Analyzing…';
-  try {
-    const body = {
-      load_id: loadId,
-      type: document.getElementById('blockageType').value,
-      location: document.getElementById('blockageLocation').value.trim(),
-      severity: document.getElementById('blockageSeverity').value,
-      estimated_delay_hours: document.getElementById('blockageHours').value,
-    };
-    const result = await jsonFetch('/api/driver/report-blockage', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    });
-    document.getElementById('blockageResult').innerHTML = renderBlockageAnalysis(result);
-    if (window.lucide) lucide.createIcons();
-    loadLoads();
-  } catch (err){
-    document.getElementById('blockageResult').innerHTML = `<div class="empty-state">Could not analyze blockage: ${esc(err.message)}</div>`;
-  } finally {
-    btn.disabled = false; btn.innerHTML = original;
-    if (window.lucide) lucide.createIcons();
-  }
-}
-
 async function loadLoads(){
   const body = document.getElementById('loadsTableBody');
-  ensureLoadsActionColumn();
-  ensureBlockageUI();
   try {
     const loads = await API.loads();
-    loadsCache = loads;
     body.innerHTML = loads.length ? loads.map(l => `
       <tr>
         <td class="truck-id">${esc(l.id)}</td>
@@ -610,17 +488,67 @@ async function loadLoads(){
         <td>${l.status.replace('_',' ')}</td>
         <td>${fmtTime(l.eta)}</td>
         <td>${l.riskInfo ? `<span class="status-chip ${l.riskInfo.level === 'HIGH' ? 'blocked' : l.riskInfo.level === 'MEDIUM' ? 'caution' : 'open'}">${l.riskInfo.risk}% ${l.riskInfo.level}</span>` : '—'}</td>
-        <td>${l.status === 'in_transit' ? `<button class="btn-clay small" data-report-blocked="${esc(l.id)}"><i data-lucide="clock-alert"></i> Blocked</button>` : '—'}</td>
+        <td class="action-cell">${l.status === 'in_transit' ? `<button class="btn-clay small" data-report-delay="${esc(l.id)}"><i data-lucide="clock"></i> Report Delay</button>` : ''}</td>
       </tr>`).join('') : `<tr><td colspan="8" class="empty-state">No loads found.</td></tr>`;
-    body.querySelectorAll('[data-report-blocked]').forEach(btn2 => {
-      btn2.addEventListener('click', () => {
-        const load = loadsCache.find(x => x.id === btn2.dataset.reportBlocked);
-        if (load) openBlockageForm(load);
-      });
-    });
+    body.querySelectorAll('[data-report-delay]').forEach(btn => btn.addEventListener('click', () => openDelayModal(btn.dataset.reportDelay)));
+    lucide.createIcons();
   } catch (e){
     body.innerHTML = `<tr><td colspan="8" class="empty-state">Could not load: ${esc(e.message)}</td></tr>`;
   }
+}
+
+/* ---------------- REPORT DELAY (real weather-driven projection, not simulated) ---------------- */
+function openDelayModal(loadId){
+  document.getElementById('delayLoadId').value = loadId;
+  document.getElementById('delayLocation').value = '';
+  document.getElementById('delayHours').value = '';
+  document.getElementById('delayModalOverlay').style.display = 'flex';
+}
+function closeDelayModal(){ document.getElementById('delayModalOverlay').style.display = 'none'; }
+async function submitDelayReport(){
+  const loadId = document.getElementById('delayLoadId').value;
+  const type = document.getElementById('delayType').value;
+  const location = document.getElementById('delayLocation').value.trim();
+  const severity = document.getElementById('delaySeverity').value;
+  const hours = Number(document.getElementById('delayHours').value);
+  if (!location) return alert('Enter a location for this blockage.');
+  if (!hours || hours <= 0) return alert('Enter the estimated delay in hours.');
+  const btn = document.getElementById('delaySubmitBtn');
+  btn.disabled = true; btn.innerHTML = '<i data-lucide="loader-2"></i> Analyzing…'; lucide.createIcons();
+  try {
+    const result = await API.reportDelay({ load_id: loadId, type, location, severity, estimated_delay_hours: hours });
+    renderDelayAnalysis(loadId, result);
+    closeDelayModal();
+    loadLoads(); refreshAlertBadge();
+  } catch (e) {
+    alert(e.message || 'Could not run delay analysis.');
+  } finally {
+    btn.disabled = false; btn.innerHTML = '<i data-lucide="triangle-alert"></i> Run Analysis'; lucide.createIcons();
+  }
+}
+function renderDelayAnalysis(loadId, r){
+  const card = document.getElementById('delayAnalysisCard');
+  const a = r.analysis;
+  const suggestion = (r.rerouteSuggestions || [])[0] || null;
+  card.innerHTML = `
+    <div class="card-head"><h3><i data-lucide="thermometer"></i> Delay Analysis — ${esc(loadId)}</h3><span class="card-tag">${esc(r.disruption.type.replace('_',' '))} at ${esc(r.disruption.location)}</span></div>
+    ${a ? `
+    <p class="box-sub">Projected over ${a.delayHours}h using real ambient weather: <b>${a.ambientTemp}°C</b>, ${a.ambientHumidity}% humidity.</p>
+    <div class="delay-result-grid">
+      <div class="delay-result-block"><span>Projected Temp</span><b>${a.projectedTemp}°C</b></div>
+      <div class="delay-result-block"><span>Projected Humidity</span><b>${a.projectedHumidity}%</b></div>
+      <div class="delay-result-block"><span>Risk Before</span><b>${a.riskBefore}%</b></div>
+      <div class="delay-result-block"><span>Risk After</span><b class="status-chip ${a.riskAfter >= 66 ? 'blocked' : a.riskAfter >= 33 ? 'caution' : 'open'}">${a.riskAfter}%</b></div>
+      <div class="delay-result-block"><span>Est. Additional Waste</span><b>${a.estimatedAdditionalWasteKg} kg</b></div>
+    </div>` : `<p class="box-sub">No cold box attached to this load — disruption logged, but no sensor-based projection is available.</p>`}
+    ${suggestion ? `<p class="box-sub">${suggestion.to && suggestion.to.name
+        ? `Reroute Assistant suggests moving this load via <b>${esc(suggestion.to.name)}</b>, saving ~${suggestion.hours_saved}h.`
+        : `Reroute Assistant checked for alternates: ${esc(suggestion.reason)}`}</p>
+       <button class="btn-clay small" onclick="switchPanel('reroute')" style="margin-top:6px;"><i data-lucide="route"></i> Open Reroute Assistant</button>` : ''}
+  `;
+  card.style.display = 'block';
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  lucide.createIcons();
 }
 
 /* ---------------- 10. WASTE & IMPACT ---------------- */
@@ -854,6 +782,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   try { initWasteChart(); } catch (e) { console.error('Chart init failed:', e); }
   try { wireDisruptionForm(); } catch (e) { console.error('Disruption form init failed:', e); }
   try { wireCargoForm(); cargoCalc(); } catch (e) { console.error('Cargo form init failed:', e); }
+  try {
+    document.getElementById('delayCancelBtn')?.addEventListener('click', closeDelayModal);
+    document.getElementById('delaySubmitBtn')?.addEventListener('click', submitDelayReport);
+    document.getElementById('delayModalOverlay')?.addEventListener('click', (e) => { if (e.target.id === 'delayModalOverlay') closeDelayModal(); });
+  } catch (e) { console.error('Delay modal init failed:', e); }
 
   // Always run backend checks and dashboard loading even if a visual library fails.
   try { await checkHealth(); } catch (e) { console.error('Health initialization failed:', e); }
