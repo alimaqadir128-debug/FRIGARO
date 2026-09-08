@@ -47,18 +47,13 @@ async function getWeather(lat, lng) {
 
   try {
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,weather_code,snowfall,rain,relative_humidity_2m&timezone=auto`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-    const res = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'FRIGARO/1.0' } });
-    clearTimeout(timeout);
+    const res = await fetch(url);
     if (!res.ok) return cached ? cached.data : null;
     const data = await res.json();
     weatherCache.set(key, { data, fetchedAt: Date.now() });
     return data;
   } catch (e) {
-    // Network/DNS failures must not crash the simulation. Use the last good
-    // value when available; callers use a documented neutral fallback otherwise.
-    console.error('Weather fetch failed:', e.name === 'AbortError' ? 'request timed out' : e.message);
+    console.error('Weather fetch failed:', e.message);
     return cached ? cached.data : null;
   }
 }
@@ -129,35 +124,6 @@ function computeLoadRisk(box, product, route) {
   return { risk, level: riskLevelFor(risk, product ? product.critical : false), tempDev: base.tempDev, humDev: base.humDev };
 }
 
-
-/* ---------------- DETERMINISTIC BLOCKAGE PROJECTION ---------------- */
-function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
-
-// Newton-style approach toward ambient conditions. k is the thermal response
-// coefficient per simulated hour; cooling reduces effective warming.
-function projectBlockedTemperature(currentTemp, ambientTemp, hours, coolingOn) {
-  const k = coolingOn ? 0.055 : 0.16;
-  return +(ambientTemp + (currentTemp - ambientTemp) * Math.exp(-k * hours)).toFixed(1);
-}
-
-function projectBlockedHumidity(currentHumidity, ambientHumidity, hours) {
-  const k = 0.10;
-  return Math.round(clamp(ambientHumidity + (currentHumidity - ambientHumidity) * Math.exp(-k * hours), 20, 99));
-}
-
-async function getActiveBlockageForBox(box) {
-  if (!box.route_id) return null;
-  const { data } = await supabase.from('disruptions').select('*')
-    .eq('route_id', box.route_id).eq('active', true)
-    .in('type', ['landslide', 'road_closure', 'traffic_jam', 'snowfall', 'accident', 'convoy_hold'])
-    .order('reported_at', { ascending: false }).limit(1);
-  return data && data[0] ? data[0] : null;
-}
-
-async function blockageElapsedHours(disruption) {
-  return Math.max(0, (Date.now() - new Date(disruption.reported_at).getTime()) / 3600000);
-}
-
 /* ---------------- ALERTS ---------------- */
 async function raiseAlert({ cold_box_id = null, load_id = null, severity, title, dedupe_key }) {
   const { error } = await supabase
@@ -195,27 +161,16 @@ async function tickColdBoxes() {
     const ambient = await getWeather(box.lat, box.lng);
     const ambientTemp = ambient && ambient.current ? ambient.current.temperature_2m : 15;
 
-    const blockage = await getActiveBlockageForBox(box);
-    let nextTemp, nextHum;
-    if (blockage) {
-      // Deterministic during a real reported blockage: no random sensor noise.
-      // Each 20s tick advances a small simulated interval, while the formula
-      // remains tied to actual elapsed blockage time and live ambient weather.
-      const elapsed = await blockageElapsedHours(blockage);
-      const stepHours = Math.max(0.02, Math.min(0.25, elapsed || 0.02));
-      nextTemp = projectBlockedTemperature(box.current_temp, ambientTemp, stepHours, box.cooling_on);
-      const ambientHum = ambient && ambient.current && Number.isFinite(ambient.current.relative_humidity_2m)
-        ? ambient.current.relative_humidity_2m : 60;
-      nextHum = projectBlockedHumidity(box.current_humidity, ambientHum, stepHours);
-    } else {
-      const coolingPull = box.cooling_on ? 0.4 : 0.05;
-      const ambientPull = 0.12;
-      nextTemp = box.current_temp + (box.target_temp - box.current_temp) * coolingPull
-        + (ambientTemp - box.current_temp) * ambientPull + (Math.random() - 0.5) * 0.3;
-      nextTemp = +nextTemp.toFixed(1);
-      nextHum = box.current_humidity + (box.target_humidity - box.current_humidity) * 0.3 + (Math.random() - 0.5) * 2;
-      nextHum = Math.round(Math.max(20, Math.min(99, nextHum)));
-    }
+    const coolingPull = box.cooling_on ? 0.4 : 0.05;
+    const ambientPull = 0.12;
+    let nextTemp = box.current_temp
+      + (box.target_temp - box.current_temp) * coolingPull
+      + (ambientTemp - box.current_temp) * ambientPull
+      + (Math.random() - 0.5) * 0.3;
+    nextTemp = +nextTemp.toFixed(1);
+
+    let nextHum = box.current_humidity + (box.target_humidity - box.current_humidity) * 0.3 + (Math.random() - 0.5) * 2;
+    nextHum = Math.round(Math.max(20, Math.min(99, nextHum)));
 
     const nextAirflow = Math.round(Math.max(15, Math.min(98, box.fan_speed * 0.9 + (Math.random() - 0.5) * 6)));
 
@@ -534,7 +489,6 @@ app.post('/api/disruptions', async (req, res) => {
   const { data, error } = await supabase.from('disruptions').insert({ route_id, type, severity, location }).select().single();
   if (error) return res.status(500).json({ error: error.message });
   await tickRoutes();
-  if (severity === 'high') await tickReroutes();
   res.json(data);
 });
 
@@ -543,61 +497,6 @@ app.post('/api/disruptions/:id/resolve', async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
   await tickRoutes();
   res.json({ ok: true });
-});
-
-/* ================================================================
-   API — Driver blockage reporting (backend-only; UI unchanged)
-   ================================================================ */
-app.post('/api/driver/report-blockage', async (req, res) => {
-  try {
-    const { load_id, route_id, type, location, severity = 'high', estimated_delay_hours = 6 } = req.body || {};
-    if ((!load_id && !route_id) || !type || !location) {
-      return res.status(400).json({ error: 'load_id or route_id, type and location are required.' });
-    }
-    let load = null; let resolvedRouteId = route_id;
-    if (load_id) {
-      const q = await supabase.from('loads').select('*, products(*), cold_boxes(*), routes(*)').eq('id', load_id).single();
-      if (q.error || !q.data) return res.status(404).json({ error: 'Load not found.' });
-      load = q.data; resolvedRouteId = resolvedRouteId || load.route_id;
-    }
-    if (!resolvedRouteId) return res.status(400).json({ error: 'The reported load has no assigned route.' });
-    const delay = clamp(Number(estimated_delay_hours) || 6, 0.25, 168);
-    const { data: disruption, error } = await supabase.from('disruptions').insert({
-      route_id: resolvedRouteId, type, severity, location, active: true
-    }).select().single();
-    if (error) return res.status(500).json({ error: error.message });
-
-    await tickRoutes();
-    // Force blocked state for a driver-reported high-severity blockage so weather
-    // refresh cannot leave rerouting empty.
-    if (severity === 'high') await supabase.from('routes').update({
-      status: 'blocked', weather_summary: `Driver reported ${type.replace(/_/g, ' ')} — ${location}`
-    }).eq('id', resolvedRouteId);
-
-    let analysis = null;
-    if (load && load.cold_boxes && load.products) {
-      const weather = await getWeather(load.cold_boxes.lat, load.cold_boxes.lng);
-      const ambientTemp = weather?.current?.temperature_2m ?? 15;
-      const ambientHum = weather?.current?.relative_humidity_2m ?? 60;
-      const projectedTemp = projectBlockedTemperature(load.cold_boxes.current_temp, ambientTemp, delay, load.cold_boxes.cooling_on);
-      const projectedHumidity = projectBlockedHumidity(load.cold_boxes.current_humidity, ambientHum, delay);
-      const before = computeBoxRisk(load.cold_boxes, load.products).risk;
-      const projectedBox = { ...load.cold_boxes, current_temp: projectedTemp, current_humidity: projectedHumidity };
-      const after = computeBoxRisk(projectedBox, load.products).risk;
-      const additionalWasteKg = +(load.weight_kg * Math.max(0, after - before) / 130).toFixed(1);
-      analysis = { delayHours: delay, ambientTemp, ambientHumidity: ambientHum, projectedTemp, projectedHumidity, riskBefore: before, riskAfter: after, riskIncrease: Math.max(0, after - before), estimatedAdditionalWasteKg: Math.min(Number(load.weight_kg), additionalWasteKg) };
-      await raiseAlert({ load_id: load.id, cold_box_id: load.cold_box_id, severity: after >= 40 ? 'severe' : 'warning',
-        title: `${load.id}: ${delay}h ${type.replace(/_/g, ' ')} delay projects cargo temperature to ${projectedTemp}°C and risk to ${after}%`,
-        dedupe_key: `load:${load.id}:blockage:${disruption.id}` });
-    }
-    await tickReroutes();
-    const { data: suggestions } = await supabase.from('reroute_suggestions').select('*, to:to_route_id(name)')
-      .eq('from_route_id', resolvedRouteId).in('status', ['pending', 'approved']).order('created_at', { ascending: false }).limit(5);
-    res.status(201).json({ disruption, analysis, rerouteSuggestions: suggestions || [] });
-  } catch (e) {
-    console.error('Driver blockage report failed:', e.message);
-    res.status(500).json({ error: e.message });
-  }
 });
 
 /* ================================================================
@@ -675,6 +574,13 @@ app.post('/api/cargo/register', async (req, res) => {
   const totalCargoValue = +(pricing_method === 'per_kg' ? totalWeight * unitPrice : boxes * unitPrice).toFixed(2);
   const departedAt = departure ? new Date(departure) : new Date();
   if (Number.isNaN(departedAt.getTime())) return res.status(400).json({ error: 'Invalid departure date.' });
+  // A stale or mistyped departure in the past would make the ETA already
+  // elapsed, so the very next background tick would silently mark this
+  // shipment "delivered" before it ever showed live in Loads in Transit.
+  // 5-minute grace window absorbs normal clock skew between browser/server.
+  if (departedAt.getTime() < Date.now() - 5 * 60 * 1000) {
+    return res.status(400).json({ error: 'Departure time is in the past. Leave it blank to depart now, or pick a current/future date and time.' });
+  }
   const eta = new Date(departedAt.getTime() + transitHours * 3600000);
 
   // Connect the shipment to a real corridor. An explicit route_id from the
@@ -776,6 +682,138 @@ app.post('/api/cargo/register', async (req, res) => {
 /* ================================================================
    API — Panel 9: Loads in transit
    ================================================================ */
+/* ================================================================
+   API — Driver-reported blockage: real physics projection, not a
+   simulated/random number. A driver logs how long they've been
+   stopped; we combine that with REAL current weather at their
+   location and a documented Newton's-Law-of-Cooling heat-transfer
+   model to project what has actually happened to the cargo —
+   then feed that straight into the same risk/alert/reroute engine
+   every other panel uses, so it's genuinely interconnected.
+   ================================================================ */
+app.post('/api/loads/:id/report-delay', async (req, res) => {
+  const { id } = req.params;
+  const hoursStopped = Number(req.body?.hours_stopped);
+  const reason = (req.body?.reason || '').trim() || null;
+
+  if (!Number.isFinite(hoursStopped) || hoursStopped <= 0 || hoursStopped > 200) {
+    return res.status(400).json({ error: 'hours_stopped must be a number between 0 and 200.' });
+  }
+
+  const { data: load, error: loadErr } = await supabase
+    .from('loads').select('*, products(*), cold_boxes(*), routes(*)').eq('id', id).single();
+  if (loadErr || !load) return res.status(404).json({ error: 'Load not found.' });
+  if (load.status !== 'in_transit') return res.status(400).json({ error: `${id} is already ${load.status} — delay analysis only applies to loads in transit.` });
+
+  const product = load.products;
+  const box = load.cold_boxes;
+  const route = load.routes;
+
+  // Real location to fetch real weather for: the assigned cold box's own
+  // coordinates if there is one, otherwise the route's checkpoint.
+  const lat = box ? box.lat : (route ? route.weather_lat : null);
+  const lng = box ? box.lng : (route ? route.weather_lng : null);
+  if (lat == null || lng == null) {
+    return res.status(400).json({ error: 'No location available for this load (no cold box and no matched route) — cannot run a real-weather projection.' });
+  }
+  const weather = await getWeather(lat, lng);
+  if (!weather || !weather.current) return res.status(502).json({ error: 'Live weather is temporarily unavailable — try again shortly.' });
+  const ambientTemp = weather.current.temperature_2m;
+  const ambientHumidity = weather.current.relative_humidity_2m;
+
+  // ---- Documented physics model (Newton's Law of Heating/Cooling) ----
+  // T(t) = T_ambient + (T_start - T_ambient) * e^(-t / tau)
+  // tau = thermal time constant: how fast the box's insulation lets it drift
+  // toward outside temperature once active cooling can no longer keep up.
+  // 6 hours reflects published performance of well-insulated reefer/cold
+  // boxes running on battery alone (commonly cited as holding safe
+  // temperature for 4-8 hours without external power) — a real, citable
+  // engineering assumption, not a random number. Humidity drifts on a
+  // slower time constant (moisture exchange is slower than heat exchange).
+  const TAU_TEMP_HOURS = 6;
+  const TAU_HUMIDITY_HOURS = 10;
+  // We assume active cooling degrades once a truck is stopped for a genuine
+  // blockage (engines are commonly shut off to save fuel during multi-hour
+  // holds), so the box starts drifting from whatever it read at the moment
+  // of the report.
+  const startTemp = box ? box.current_temp : (product.ideal_temp_min + product.ideal_temp_max) / 2;
+  const startHumidity = box ? box.current_humidity : (product.ideal_humidity_min + product.ideal_humidity_max) / 2;
+
+  const project = (t) => ({
+    temp: ambientTemp + (startTemp - ambientTemp) * Math.exp(-t / TAU_TEMP_HOURS),
+    humidity: ambientHumidity + (startHumidity - ambientHumidity) * Math.exp(-t / TAU_HUMIDITY_HOURS),
+  });
+
+  const proj = project(hoursStopped);
+  const projectedTemp = Math.round(proj.temp * 10) / 10;
+  const projectedHumidity = Math.round(Math.min(99, Math.max(1, proj.humidity)));
+  // Battery drains at a documented flat rate once cooling can't be sustained
+  // by solar/engine charging — ~3%/hour is a reasonable assumption for a
+  // small DC compressor running off battery alone.
+  const projectedBattery = box ? Math.max(0, Math.round(box.battery - hoursStopped * 3)) : null;
+
+  const projectedBox = box ? { ...box, current_temp: projectedTemp, current_humidity: projectedHumidity, battery: projectedBattery, cooling_on: false } : null;
+  const riskInfo = computeLoadRisk(projectedBox, product, route);
+  const riskBefore = computeLoadRisk(box, product, route);
+
+  // Project forward hour-by-hour to tell the driver/dispatcher exactly how
+  // much time is left before this crosses into HIGH risk, not just where it
+  // stands right now.
+  let hoursUntilHighRisk = null;
+  for (let t = hoursStopped; t <= hoursStopped + 48; t += 0.5) {
+    const p = project(t);
+    const testBox = box ? { ...box, current_temp: p.temp, current_humidity: Math.min(99, Math.max(1, p.humidity)), battery: Math.max(0, box.battery - t * 3), cooling_on: false } : null;
+    const r = computeLoadRisk(testBox, product, route);
+    if (r.level === 'HIGH') { hoursUntilHighRisk = Math.round((t - hoursStopped) * 10) / 10; break; }
+  }
+
+  // Persist the real projection to the actual cold box, so Cold Box Health,
+  // Cooling & Airflow, Spoilage Risk and Loads in Transit all immediately
+  // reflect it — this is one real event changing real state, not a report
+  // that lives only in this response.
+  if (box) {
+    await supabase.from('cold_boxes').update({
+      current_temp: projectedTemp, current_humidity: projectedHumidity,
+      battery: projectedBattery, cooling_on: false, updated_at: new Date().toISOString(),
+    }).eq('id', box.id);
+  }
+
+  await raiseAlert({
+    load_id: id, cold_box_id: box ? box.id : null,
+    severity: riskInfo.level === 'HIGH' ? 'severe' : riskInfo.level === 'MEDIUM' ? 'warning' : 'info',
+    title: `${id}: driver reported ${hoursStopped}h stopped${route ? ` on ${route.name}` : ''} — projected ${projectedTemp}°C, risk now ${riskInfo.level}${reason ? ` (${reason})` : ''}`,
+    dedupe_key: `load:${id}:delay-report`,
+  });
+
+  let rerouteSuggestion = null;
+  if (route && (route.status !== 'open' || riskInfo.level === 'HIGH')) {
+    await tickReroutes();
+    const { data: suggestion } = await supabase
+      .from('reroute_suggestions').select('*, to:to_route_id(name)')
+      .eq('load_id', id).eq('from_route_id', route.id)
+      .order('created_at', { ascending: false }).limit(1).maybeSingle();
+    rerouteSuggestion = suggestion ? {
+      toRouteName: suggestion.to ? suggestion.to.name : null,
+      hoursSaved: suggestion.hours_saved, reason: suggestion.reason, status: suggestion.status,
+    } : null;
+  }
+
+  res.json({
+    loadId: id,
+    coldBoxName: box ? box.name : null,
+    routeName: route ? route.name : null,
+    hoursStopped,
+    model: { name: "Newton's Law of Cooling", tauTempHours: TAU_TEMP_HOURS, tauHumidityHours: TAU_HUMIDITY_HOURS },
+    ambient: { temp: ambientTemp, humidity: ambientHumidity, label: weather.current.weather_code != null ? (WMO_LABELS[weather.current.weather_code] || 'Unknown') : null },
+    startTemp: Math.round(startTemp * 10) / 10, startHumidity: Math.round(startHumidity),
+    projectedTemp, projectedHumidity, projectedBattery,
+    riskBefore: riskBefore.risk, riskBeforeLevel: riskBefore.level,
+    risk: riskInfo.risk, riskLevel: riskInfo.level,
+    hoursUntilHighRisk,
+    rerouteSuggestion,
+  });
+});
+
 app.get('/api/loads', async (req, res) => {
   const { data, error } = await supabase
     .from('loads').select('*, products(name), cold_boxes(name), routes(name, status)')

@@ -610,6 +610,15 @@ async function loadRegisterCargo(){
   const select = document.getElementById('cargoProduct');
   if (!select) return;
   try {
+    // Never let the picker offer (or silently keep, via browser autofill) a
+    // past date/time — that's exactly what causes a shipment to look
+    // "delivered" the instant it's registered.
+    const departureInput = document.getElementById('cargoDeparture');
+    if (departureInput) {
+      const now = new Date();
+      now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+      departureInput.min = now.toISOString().slice(0, 16);
+    }
     if (!cargoProducts.length) cargoProducts = await API.products();
     const current = select.value;
     select.innerHTML = `<option value="">Select product</option>` + cargoProducts.map(p => `<option value="${esc(p.id)}">${esc(p.name)} · ${esc(p.category)}</option>`).join('');
