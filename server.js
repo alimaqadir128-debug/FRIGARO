@@ -1532,7 +1532,8 @@ app.post(
       weight_per_box_kg,
       pricing_method,
       unit_price,
-      expected_duration_hours
+      expected_duration_hours,
+      route_id
     } = req.body;
 
     if (
@@ -1616,34 +1617,65 @@ app.post(
           product.id
       ) || null;
 
-    const { data: routes } =
-      await supabase
-        .from('routes')
-        .select('*');
+    /* ================================================================
+       REPLACED ROUTE MATCHING SECTION
+       ================================================================ */
+    const { data: routes, error: routesErr } =
+      await supabase.from('routes').select('*');
 
-    function normalisePlace(value) {
-      return String(value || '')
-        .trim()
-        .toLowerCase();
+    if (routesErr || !routes || !routes.length) {
+      return res.status(500).json({
+        error: 'No tracked corridors are available. Please configure routes first.'
+      });
     }
 
-    const o =
-      normalisePlace(origin);
+    let matchedRoute = null;
 
-    const d =
-      normalisePlace(destination);
+    // 1. Explicit corridor selection always wins.
+    if (route_id) {
+      matchedRoute = routes.find(r => r.id === route_id) || null;
 
-    let matchedRoute =
-      (routes || []).find(route => {
-        const name =
-          String(route.name || '')
-            .toLowerCase();
+      if (!matchedRoute) {
+        return res.status(400).json({
+          error: 'Selected corridor was not found.'
+        });
+      }
+    }
 
-        return (
-          name.includes(o) &&
-          name.includes(d)
-        );
-      }) || null;
+    // 2. If no corridor was selected, use a deterministic
+    //    destination-based fallback.
+    if (!matchedRoute) {
+      const destinationText = String(destination || '').trim().toLowerCase();
+
+      if (destinationText.includes('jammu')) {
+        matchedRoute = routes.find(r => r.id === 'nh44') || null;
+      } else if (
+        destinationText.includes('ladakh') ||
+        destinationText.includes('leh')
+      ) {
+        matchedRoute = routes.find(r => r.id === 'leh') || null;
+      } else if (destinationText.includes('gurez')) {
+        matchedRoute = routes.find(r => r.id === 'gurez') || null;
+      } else if (destinationText.includes('poonch')) {
+        matchedRoute = routes.find(r => r.id === 'mughal') || null;
+      } else if (
+        destinationText.includes('srinagar') ||
+        destinationText.includes('pampore') ||
+        destinationText.includes('sopore')
+      ) {
+        matchedRoute = routes.find(r => r.id === 'sopore') || null;
+      }
+    }
+
+    // 3. Never create a shipment without a tracked corridor.
+    if (!matchedRoute) {
+      return res.status(400).json({
+        error: 'Please select a tracked corridor before registering this cargo.'
+      });
+    }
+    /* ================================================================
+       END REPLACED ROUTE MATCHING SECTION
+       ================================================================ */
 
     const id =
       `FRG-${new Date().getFullYear()}-${Math.random()
